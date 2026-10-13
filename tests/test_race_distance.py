@@ -6,10 +6,12 @@ cumulative race distance so drivers can be ranked against each other. These
 tests drive it with a fake session (no FastF1, network or cache needed).
 """
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 
+from src import f1_data
 from src.f1_data import _process_single_driver
 
 LAP_LEN = 5000.0  # metres
@@ -37,12 +39,23 @@ def _lap_telemetry(lap_index, t_offset=0.0):
 
 
 class _FakeLap:
+    # Unknown lap boundaries: the position-coverage check then only looks at gaps
+    # between samples.
+    LapStartTime = pd.NaT
+    Time = pd.NaT
+
     def __init__(self, number, telemetry=None, error=None):
         self.LapNumber = float(number)  # FastF1 stores lap numbers as floats
         self.Compound = "SOFT"
         self.TyreLife = 1.0
         self._telemetry = telemetry
         self._error = error
+
+    def get_pos_data(self, **kwargs):
+        # Position data present exactly when the lap has telemetry.
+        if self._telemetry is None or self._telemetry.empty:
+            return pd.DataFrame({"SessionTime": pd.to_timedelta([], unit="s")})
+        return self._telemetry[["SessionTime"]]
 
     def get_telemetry(self):
         if self._error is not None:
@@ -77,6 +90,15 @@ def _race_distance(laps, code="TST"):
 
 
 class RaceDistanceTests(unittest.TestCase):
+    def setUp(self):
+        # Laps without position data must be skipped here, not rebuilt from car data.
+        # create=True keeps this working on versions without that helper.
+        patcher = mock.patch.object(
+            f1_data, "_reference_lap_telemetry", return_value=None, create=True
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_distance_accumulates_across_laps(self):
         laps = [_FakeLap(n + 1, _lap_telemetry(n)) for n in range(3)]
         t, dist = _race_distance(laps)
